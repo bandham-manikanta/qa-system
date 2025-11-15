@@ -1,4 +1,5 @@
 # main.py
+import uvicorn
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from message_fetcher import get_messages
@@ -38,10 +39,6 @@ async def startup_event():
     try:
         # Fetch messages
         messages = get_messages()
-        print('*' * 20)
-        for m in messages:
-            print(m, "\n")
-        print('*' * 20)
         logger.info(f"✓ Fetched {len(messages)} messages")
         
         # Initialize vector store (will skip if already initialized)
@@ -151,5 +148,4 @@ def get_stats():
 
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
