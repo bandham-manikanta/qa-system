@@ -5,125 +5,106 @@ from typing import List, Dict
 from sentence_transformers import SentenceTransformer
 import os
 
-# Initialize embedding model (runs locally, free)
-EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')  # Fast, lightweight
+_model = None
+_collection = None
 
-# Initialize ChromaDB client
-client = chromadb.Client(Settings(
-    anonymized_telemetry=False,
-    is_persistent=True,
-    persist_directory="./chroma_db"  # Local storage
-))
+def get_model():
+    global _model
+    if _model is None:
+        # Use smallest possible model to save memory
+        _model = SentenceTransformer('all-MiniLM-L6-v2')
+    return _model
 
-COLLECTION_NAME = "member_messages"
-
+def get_collection():
+    global _collection
+    if _collection is None:
+        client = chromadb.Client(Settings(
+            anonymized_telemetry=False,
+            is_persistent=True,
+            persist_directory="./chroma_db"
+        ))
+        try:
+            _collection = client.get_collection("member_messages")
+        except:
+            # Will be created on first /refresh call
+            pass
+    return _collection
 
 def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
-    """
-    Initialize ChromaDB with all messages.
-    Creates embeddings and stores them.
-    """
-    print(f"\n🔧 Initializing vector store...")
+    global _collection
     
-    # Delete existing collection if recreating
+    client = chromadb.Client(Settings(
+        anonymized_telemetry=False,
+        is_persistent=True,
+        persist_directory="./chroma_db"
+    ))
+    
     if force_recreate:
         try:
-            client.delete_collection(COLLECTION_NAME)
-            print("✓ Deleted existing collection")
+            client.delete_collection("member_messages")
         except:
             pass
     
-    # Get or create collection
     try:
-        collection = client.get_collection(COLLECTION_NAME)
-        print(f"✓ Found existing collection with {collection.count()} documents")
-        
-        # If collection exists and has same number of docs, skip initialization
-        if collection.count() == len(messages) and not force_recreate:
-            print("✓ Vector store already initialized, skipping")
-            return collection
+        _collection = client.get_collection("member_messages")
+        if _collection.count() == len(messages):
+            print(f"✓ Using existing {_collection.count()} embeddings")
+            return _collection
     except:
-        collection = client.create_collection(
-            name=COLLECTION_NAME,
-            metadata={"description": "Member messages for QA system"}
-        )
-        print("✓ Created new collection")
+        pass
     
-    # Prepare documents for embedding
-    print(f"📝 Processing {len(messages)} messages...")
+    _collection = client.create_collection("member_messages")
+    
+    print(f"📝 Embedding {len(messages)} messages...")
     
     documents = []
     metadatas = []
     ids = []
     
-    for idx, msg in enumerate(messages):
-        # Create rich text representation for embedding
-        doc_text = f"User: {msg['user_name']}\nDate: {msg['timestamp']}\nMessage: {msg['message']}"
-        documents.append(doc_text)
-        
-        # Store metadata
+    for msg in messages:
+        doc = f"User: {msg['user_name']}\nDate: {msg['timestamp']}\nMessage: {msg['message']}"
+        documents.append(doc)
         metadatas.append({
             "user_name": msg['user_name'],
             "user_id": msg['user_id'],
             "timestamp": msg['timestamp'],
             "message": msg['message']
         })
-        
         ids.append(msg['id'])
     
-    # Generate embeddings and add to ChromaDB
-    print("🧮 Generating embeddings (this may take 30-60 seconds)...")
+    model = get_model()
+    embeddings = model.encode(documents, show_progress_bar=False).tolist()
     
-    # ChromaDB can handle embeddings automatically, but we'll do it explicitly for control
-    embeddings = EMBEDDING_MODEL.encode(documents, show_progress_bar=True).tolist()
-    
-    print("💾 Storing in ChromaDB...")
-    
-    # Add in batches to avoid memory issues
     batch_size = 100
     for i in range(0, len(documents), batch_size):
         batch_end = min(i + batch_size, len(documents))
-        collection.add(
+        _collection.add(
             documents=documents[i:batch_end],
             embeddings=embeddings[i:batch_end],
             metadatas=metadatas[i:batch_end],
             ids=ids[i:batch_end]
         )
-        print(f"  Added batch {i//batch_size + 1}/{(len(documents)-1)//batch_size + 1}")
     
-    print(f"✅ Vector store initialized with {len(messages)} messages\n")
-    return collection
+    print(f"✅ Stored {len(messages)} embeddings")
+    return _collection
 
 
 def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
-    """
-    Search for relevant messages using semantic similarity.
+    collection = get_collection()
     
-    Args:
-        question: User's natural language question
-        top_k: Number of most relevant messages to return
+    if collection is None or collection.count() == 0:
+        # Initialize on first use
+        from message_fetcher import get_messages
+        messages = get_messages()
+        initialize_vector_store(messages)
+        collection = get_collection()
     
-    Returns:
-        List of relevant message dictionaries
-    """
-    try:
-        collection = client.get_collection(COLLECTION_NAME)
-    except:
-        print("⚠️ Vector store not initialized")
-        return []
+    model = get_model()
+    question_embedding = model.encode([question]).tolist()
     
-    # Generate embedding for question
-    question_embedding = EMBEDDING_MODEL.encode([question]).tolist()
+    results = collection.query(query_embeddings=question_embedding, n_results=top_k)
     
-    # Query ChromaDB for similar messages
-    results = collection.query(
-        query_embeddings=question_embedding,
-        n_results=top_k
-    )
-    
-    # Convert results to message format
     relevant_messages = []
-    
     if results['metadatas'] and len(results['metadatas'][0]) > 0:
         for metadata in results['metadatas'][0]:
             relevant_messages.append({
@@ -133,20 +114,12 @@ def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
                 'message': metadata['message']
             })
     
-    print(f"🔍 Found {len(relevant_messages)} relevant messages for query")
+    print(f"🔍 Found {len(relevant_messages)} relevant messages")
     return relevant_messages
 
 
 def get_collection_stats() -> Dict:
-    """Get statistics about the vector store."""
-    try:
-        collection = client.get_collection(COLLECTION_NAME)
-        return {
-            "total_documents": collection.count(),
-            "initialized": True
-        }
-    except:
-        return {
-            "total_documents": 0,
-            "initialized": False
-        }
+    collection = get_collection()
+    if collection:
+        return {"total_documents": collection.count(), "initialized": True}
+    return {"total_documents": 0, "initialized": False}
