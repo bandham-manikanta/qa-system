@@ -79,9 +79,9 @@ Clone it, make a virtual environment, install dependencies:
 ```bash
 git clone https://github.com/bandham-manikanta/qa-system.git
 cd qa-system
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+pip install uv
+uv venv
+./.venv/Scripts/activate (Windows)
 ```
 
 Add a .env file with your NVIDIA key:
@@ -92,7 +92,7 @@ NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 
 Run it:
 ```bash
-python main.py
+uv run uvicorn main:app 
 ```
 
 First time takes a minute to pull all the messages and build embeddings. After that starts up in a couple seconds.

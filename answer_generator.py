@@ -7,11 +7,6 @@ from vector_store import search_relevant_messages
 
 load_dotenv()
 
-client = OpenAI(
-    api_key=os.getenv("NVIDIA_API_KEY"),
-    base_url=os.getenv("NVIDIA_BASE_URL")
-)
-
 MODEL_NAME = "qwen/qwen3-next-80b-a3b-instruct"
 
 
@@ -39,6 +34,10 @@ def generate_answer(question: str, messages: List[Dict] = None) -> str:
         messages: Optional - if provided, uses these instead of vector search
                   (used for backward compatibility)
     """
+    client = OpenAI(
+        api_key=os.getenv("NVIDIA_API_KEY"),
+        base_url=os.getenv("NVIDIA_BASE_URL")
+    )
     # Use vector search to find relevant messages
     if messages is None:
         print(f"🔎 Using vector search for: {question}")

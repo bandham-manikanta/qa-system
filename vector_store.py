@@ -2,8 +2,6 @@
 import chromadb
 from chromadb.config import Settings
 from typing import List, Dict
-from sentence_transformers import SentenceTransformer
-import os
 
 _model = None
 _collection = None
@@ -11,7 +9,7 @@ _collection = None
 def get_model():
     global _model
     if _model is None:
-        # Use smallest possible model to save memory
+        from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer('all-MiniLM-L6-v2')
     return _model
 
@@ -26,7 +24,6 @@ def get_collection():
         try:
             _collection = client.get_collection("member_messages")
         except:
-            # Will be created on first /refresh call
             pass
     return _collection
 
