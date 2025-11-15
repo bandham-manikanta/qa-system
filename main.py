@@ -38,6 +38,10 @@ async def startup_event():
     try:
         # Fetch messages
         messages = get_messages()
+        print('*' * 20)
+        for m in messages:
+            print(m, "\n")
+        print('*' * 20)
         logger.info(f"✓ Fetched {len(messages)} messages")
         
         # Initialize vector store (will skip if already initialized)

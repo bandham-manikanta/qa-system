@@ -49,6 +49,8 @@ def generate_answer(question: str, messages: List[Dict] = None) -> str:
     
     if not relevant_messages:
         return "I don't have any relevant information to answer this question."
+
+    print('relevant_messages:', relevant_messages)
     
     context = prepare_context(relevant_messages)
     
