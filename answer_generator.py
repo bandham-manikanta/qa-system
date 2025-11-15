@@ -3,16 +3,15 @@ import os
 from openai import OpenAI
 from typing import List, Dict
 from dotenv import load_dotenv
+from vector_store import search_relevant_messages
 
 load_dotenv()
 
-# Initializing NVIDIA NIM client
 client = OpenAI(
     api_key=os.getenv("NVIDIA_API_KEY"),
     base_url=os.getenv("NVIDIA_BASE_URL")
 )
 
-# EXACT model name from NVIDIA documentation (case-sensitive!)
 MODEL_NAME = "qwen/qwen3-next-80b-a3b-instruct"
 
 
@@ -31,38 +30,51 @@ def prepare_context(messages: List[Dict]) -> str:
     return "\n---\n".join(context_lines)
 
 
-def generate_answer(question: str, messages: List[Dict]) -> str:
+def generate_answer(question: str, messages: List[Dict] = None) -> str:
     """
-    Use LLM to answer the question based on the messages.
+    Use vector search + LLM to answer the question.
+    
+    Args:
+        question: User's question
+        messages: Optional - if provided, uses these instead of vector search
+                  (used for backward compatibility)
     """
-    context = prepare_context(messages)
+    # Use vector search to find relevant messages
+    if messages is None:
+        print(f"🔎 Using vector search for: {question}")
+        relevant_messages = search_relevant_messages(question, top_k=15)
+    else:
+        # Fallback to old method if messages provided
+        relevant_messages = messages
     
-    max_context_chars = 100000
-    if len(context) > max_context_chars:
-        context = context[:max_context_chars] + "\n\n[... truncated ...]"
+    if not relevant_messages:
+        return "I don't have any relevant information to answer this question."
     
-    system_prompt = """You are a helpful assistant that answers questions based on member messages.
+    context = prepare_context(relevant_messages)
+    
+    system_prompt = """You are a precise assistant that answers questions based on member messages.
 
-RULES:
-1. Answer based ONLY on the information in the messages
+CRITICAL RULES:
+1. Answer based ONLY on the information in the messages provided
 2. Be CONCISE - one or two sentences maximum
-3. If information is not available, say ONLY: "I don't have that information"
+3. If information is not available in the messages, say ONLY: "I don't have that information"
 4. For dates: provide the exact date/time mentioned
 5. For counts: provide just the number
 6. For lists: provide comma-separated items
 7. Do NOT add explanations or caveats unless necessary
 8. Extract ONLY the specific information asked for"""
 
-    user_prompt = f"""Based on these member messages:
+    user_prompt = f"""Messages:
 
 {context}
 
 Question: {question}
 
-Provide a direct answer based only on the information above."""
+Answer concisely:"""
 
     print(f"Sending question to LLM: {question}")
     print(f"Using model: {MODEL_NAME}")
+    print(f"Context size: {len(relevant_messages)} messages")
     
     try:
         response = client.chat.completions.create(
@@ -72,7 +84,7 @@ Provide a direct answer based only on the information above."""
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0,
-            max_tokens=500
+            max_tokens=200
         )
         
         answer = response.choices[0].message.content.strip()
