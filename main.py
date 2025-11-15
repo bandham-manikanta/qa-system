@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from message_fetcher import get_messages
 from answer_generator import generate_answer
 from vector_store import get_collection_stats
+from fastapi.responses import RedirectResponse
 from datetime import datetime
 import logging
 
@@ -26,17 +27,10 @@ app.add_middleware(
 )
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def root():
-    stats = get_collection_stats()
-    return {
-        "status": "healthy",
-        "service": "Question-Answering System (RAG)",
-        "version": "2.0.0",
-        "vector_store": stats,
-        "timestamp": datetime.utcnow().isoformat(),
-        "usage": "GET /ask?question=YOUR_QUESTION"
-    }
+    return RedirectResponse(url="/docs")
+
 
 
 @app.get("/health")
