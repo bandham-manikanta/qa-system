@@ -30,14 +30,21 @@ def get_embeddings_client():
         )
     return _embeddings_client
 
-def get_embedding(text: str) -> List[float]:
-    """Get embedding from NVIDIA API (no local model)"""
+def get_embedding(text: str, input_type: str = "passage") -> List[float]:
+    """
+    Get embedding from NVIDIA API
+    
+    Args:
+        text: Text to embed
+        input_type: "query" for questions, "passage" for documents
+    """
     client = get_embeddings_client()
     
     response = client.embeddings.create(
         input=text,
-        model="nvidia/nv-embedqa-e5-v5",  # NVIDIA's embedding model
-        encoding_format="float"
+        model="nvidia/nv-embedqa-e5-v5",
+        encoding_format="float",
+        extra_body={"input_type": input_type, "truncate": "END"}  # ADD THIS
     )
     
     return response.data[0].embedding
@@ -53,8 +60,8 @@ def get_collection_stats() -> Dict:
 def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
     client = get_client()
     
-    # Get embedding from NVIDIA API (lightweight, no model loading)
-    question_embedding = get_embedding(question)
+    # Use "query" type for questions
+    question_embedding = get_embedding(question, input_type="query")
     
     try:
         results = client.search(
@@ -82,7 +89,6 @@ def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
 def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
     client = get_client()
     
-    # Check if collection exists
     collections = client.get_collections().collections
     exists = any(c.name == COLLECTION_NAME for c in collections)
     
@@ -95,21 +101,20 @@ def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
     elif exists and force_recreate:
         client.delete_collection(COLLECTION_NAME)
     
-    # Create collection (1024 dims for NVIDIA embeddings)
     from qdrant_client.models import Distance, VectorParams, PointStruct
     
     client.create_collection(
         collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=1024, distance=Distance.COSINE)  # NVIDIA embedding size
+        vectors_config=VectorParams(size=1024, distance=Distance.COSINE)
     )
     
     print(f"📝 Embedding {len(messages)} messages using NVIDIA API...")
     
-    # Prepare data
     points = []
     for idx, msg in enumerate(messages):
         text = f"User: {msg['user_name']}\nDate: {msg['timestamp']}\nMessage: {msg['message']}"
-        embedding = get_embedding(text)  # API call, not local model
+        # Use "passage" type for documents being indexed
+        embedding = get_embedding(text, input_type="passage")
         
         points.append(PointStruct(
             id=idx,
@@ -125,7 +130,6 @@ def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
         if (idx + 1) % 50 == 0:
             print(f"  Embedded {idx + 1}/{len(messages)}")
     
-    # Upload in batches
     batch_size = 100
     for i in range(0, len(points), batch_size):
         batch = points[i:i+batch_size]
