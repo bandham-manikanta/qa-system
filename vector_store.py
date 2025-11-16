@@ -3,11 +3,12 @@ import os
 from qdrant_client import QdrantClient
 from typing import List, Dict
 from dotenv import load_dotenv
+from openai import OpenAI
 
 load_dotenv()
 
 _client = None
-_model = None
+_embeddings_client = None
 COLLECTION_NAME = "member_messages"
 
 def get_client():
@@ -20,14 +21,26 @@ def get_client():
         )
     return _client
 
-def get_model():
-    global _model
-    if _model is None:
-        print("Loading sentence transformer model...")
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer('all-MiniLM-L6-v2')
-        print("Model loaded!")
-    return _model
+def get_embeddings_client():
+    global _embeddings_client
+    if _embeddings_client is None:
+        _embeddings_client = OpenAI(
+            api_key=os.getenv("NVIDIA_API_KEY"),
+            base_url="https://integrate.api.nvidia.com/v1"
+        )
+    return _embeddings_client
+
+def get_embedding(text: str) -> List[float]:
+    """Get embedding from NVIDIA API (no local model)"""
+    client = get_embeddings_client()
+    
+    response = client.embeddings.create(
+        input=text,
+        model="nvidia/nv-embedqa-e5-v5",  # NVIDIA's embedding model
+        encoding_format="float"
+    )
+    
+    return response.data[0].embedding
 
 def get_collection_stats() -> Dict:
     try:
@@ -39,9 +52,9 @@ def get_collection_stats() -> Dict:
 
 def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
     client = get_client()
-    model = get_model()  # Only loads when first /ask is called
     
-    question_embedding = model.encode(question).tolist()
+    # Get embedding from NVIDIA API (lightweight, no model loading)
+    question_embedding = get_embedding(question)
     
     try:
         results = client.search(
@@ -49,7 +62,8 @@ def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
             query_vector=question_embedding,
             limit=top_k
         )
-    except:
+    except Exception as e:
+        print(f"Search error: {e}")
         return []
     
     relevant_messages = [
@@ -81,23 +95,21 @@ def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
     elif exists and force_recreate:
         client.delete_collection(COLLECTION_NAME)
     
-    # Create collection
+    # Create collection (1024 dims for NVIDIA embeddings)
     from qdrant_client.models import Distance, VectorParams, PointStruct
     
     client.create_collection(
         collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+        vectors_config=VectorParams(size=1024, distance=Distance.COSINE)  # NVIDIA embedding size
     )
     
-    print(f"📝 Embedding {len(messages)} messages...")
-    
-    model = get_model()
+    print(f"📝 Embedding {len(messages)} messages using NVIDIA API...")
     
     # Prepare data
     points = []
     for idx, msg in enumerate(messages):
         text = f"User: {msg['user_name']}\nDate: {msg['timestamp']}\nMessage: {msg['message']}"
-        embedding = model.encode(text).tolist()
+        embedding = get_embedding(text)  # API call, not local model
         
         points.append(PointStruct(
             id=idx,
@@ -109,6 +121,9 @@ def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
                 "message": msg['message']
             }
         ))
+        
+        if (idx + 1) % 50 == 0:
+            print(f"  Embedded {idx + 1}/{len(messages)}")
     
     # Upload in batches
     batch_size = 100
