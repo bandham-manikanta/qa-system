@@ -33,12 +33,6 @@ app.add_middleware(
 def root():
     return RedirectResponse(url="/docs")
 
-
-@app.get("/ping")
-def ping():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
-
-
 @app.get("/health")
 def health_check():
     try:
