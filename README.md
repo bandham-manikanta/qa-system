@@ -8,7 +8,7 @@ Spent the last couple days building this - it's an API that answers questions ab
 
 Got about 3300 messages from luxury concierge clients in a database. When you ask a question, the system:
 1. Converts your question into a vector (embedding)
-2. Searches for similar messages using ChromaDB
+2. Searches for similar messages using Qdrant Cloud
 3. Takes the top 15 matches
 4. Feeds them to NVIDIA's Qwen LLM
 5. Returns the answer
@@ -17,7 +17,7 @@ The whole vector search part is what makes this work. Without it you'd be sendin
 
 **Built with:**
 - FastAPI - handles the web requests
-- ChromaDB - vector database running locally
+- Qdrant Cloud - managed vector database
 - sentence-transformers - creates the embeddings
 - NVIDIA NIM - the actual LLM (Qwen 3)
 - Render - where it's deployed
@@ -28,13 +28,13 @@ My first version just grabbed every message and sent them all to the LLM with th
 
 Next I tried being smarter about filtering. If someone asks "what does Vikram want", just pull Vikram's messages. Way faster. But then questions like "who's going to Paris?" didn't work because there's no name to filter on. Back to the drawing board.
 
-That's when I switched to vector search. Every message gets embedded once at startup. Questions get embedded on the fly. Find the closest matches, send just those to the LLM. Takes 45 seconds to set up the first time but after that it's quick and way more accurate.
+That's when I switched to vector search. Every message gets embedded once. Questions get embedded on the fly. Find the closest matches, send just those to the LLM. Initially tried ChromaDB locally but ran into memory issues on Render's free tier (512MB limit). Switched to Qdrant Cloud's free tier which solved the problem - the vector database runs externally so the app starts fast and uses minimal memory.
 
 I looked into fine-tuning a model but that felt like that is way too complicated for this use case so I didnt choose that route. Would need training data, GPU time.
 
 ## Things I didn't do
 
-Thought about mixing keyword and semantic search together. Like if someone mentions "Paris" specifically, weight those messages higher. Might help in some edge cases but seemed like not worth imlementing in this short time.
+Thought about mixing keyword and semantic search together. Like if someone mentions "Paris" specifically, weight those messages higher. Might help in some edge cases but seemed like not worth implementing in this short time.
 
 Almost added response caching. If someone asks the same question twice, just return the cached answer. But looked at the data and most questions are actually different. Plus Render's free tier sleeps anyway so cache would just get deleted.
 
@@ -64,13 +64,13 @@ Kind of a perfect example of the system working right even when it looks wrong.
 
 ## What I'd change
 
-1. There's no memory between questions. Can't do follow-ups. Like you can't ask "when is Layla's trip" and then "where is she staying" - the second question doesn't know what the first one was about.
-
-Startup is slow. 45 seconds to embed everything. Could save the embeddings to disk and load them but didn't get to it.
+There's no memory between questions. Can't do follow-ups. Like you can't ask "when is Layla's trip" and then "where is she staying" - the second question doesn't know what the first one was about.
 
 Prompts could be better. Sometimes answers are too long, sometimes too cautious. Needs tuning.
 
 Free tier on Render sleeps after 15 minutes which means first request takes 30+ seconds to wake everything up. Annoying but it's free so can't complain.
+
+Using Qdrant Cloud instead of local ChromaDB solved the memory issues on Render's free tier. External vector DB means faster startup and no rebuilding on deploy. The embeddings persist across restarts which is nice.
 
 ## Steps to run this locally:
 
@@ -81,48 +81,60 @@ git clone https://github.com/bandham-manikanta/qa-system.git
 cd qa-system
 pip install uv
 uv venv
-./.venv/Scripts/activate (Windows)
+./.venv/Scripts/activate  # Windows
+# source .venv/bin/activate  # Mac/Linux
 ```
 
-Add a .env file with your NVIDIA key:
+Add a .env file with your keys:
 ```
 NVIDIA_API_KEY=your-key
 NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+QDRANT_URL=your-qdrant-cluster-url
+QDRANT_API_KEY=your-qdrant-key
 ```
 
 Run it:
 ```bash
-uv run uvicorn main:app 
+uv run uvicorn main:app --reload
 ```
 
-First time takes a minute to pull all the messages and build embeddings. After that starts up in a couple seconds.
+First time takes a minute to pull all the messages and build embeddings in Qdrant. After that starts up in a couple seconds.
 
 ## What you can hit
 
-- `GET /` - shows you it's working, gives examples
+- `GET /` - redirects to Swagger docs
+- `GET /docs` - interactive API documentation
 - `GET /ask?question=your question` - the main endpoint
 - `GET /health` - status check for monitoring
 - `GET /stats` - how many messages per user
-- `GET /refresh` - rebuilds everything (slow)
+- `GET /refresh` - rebuilds embeddings in Qdrant (slow)
 
 ## Deployment:
 
 Running on Render free tier. Sleeps after 15 minutes of inactivity. First hit after sleep takes a while.
 
-ChromaDB stores files on disk so at least it doesn't rebuild the index every deploy.
+Qdrant Cloud hosts the vector database (free tier: 1GB), so embeddings are stored separately and persist across deploys. This solved the memory issues I had with running ChromaDB locally on Render.
 
 Need to set environment variables in Render dashboard:
 - NVIDIA_API_KEY
 - NVIDIA_BASE_URL
+- QDRANT_URL
+- QDRANT_API_KEY
+
+Build command: `pip install uv && uv sync`
+
+Start command: `uv run uvicorn main:app --host 0.0.0.0 --port $PORT`
 
 ## Current problems
 
-Startup time could be better. (Cold starts on free tier are slow.)
+The Layla London question works correctly but looks wrong at first glance.
 
-Count questions ("how many times did X") sometimes miss thigns because we only look at top 15 messages.
+Count questions ("how many times did X") sometimes miss things because we only look at top 15 messages.
+
+Cold starts on free tier are slow (30+ seconds).
+
+First query after startup triggers embedding initialization in Qdrant if not already done, which adds a few seconds.
 
 ---
 
-Took longer than I thought it would but came out pretty good. Vector search really does help compared to just dumping everything into an LLM through prompt.
-
----
+Took longer than I thought it would but came out pretty good. Vector search really does help compared to just dumping everything into an LLM through prompt. Moving to Qdrant Cloud was the right call - fixed the deployment issues and actually made the architecture cleaner.
