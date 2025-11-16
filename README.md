@@ -18,8 +18,7 @@ The whole vector search part is what makes this work. Without it you'd be sendin
 **Built with:**
 - FastAPI - handles the web requests
 - Qdrant Cloud - managed vector database
-- sentence-transformers - creates the embeddings
-- NVIDIA NIM - the actual LLM (Qwen 3)
+- NVIDIA NIM - embeddings & LLM (Qwen 3, nv-embedqa-e5-v5)
 - Render - where it's deployed
 
 ## Current implementation:
