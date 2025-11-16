@@ -116,8 +116,15 @@ def get_collection_stats() -> Dict:
         }
 
 
+# vector_store.py - update search_relevant_messages function
+
 def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
-    """Search for relevant messages"""
+    """
+    Search for relevant messages
+    Returns:
+        - List of messages if successful (can be empty if no matches)
+        - None if vector store doesn't exist
+    """
     client = get_client()
     
     try:
@@ -125,42 +132,53 @@ def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
         count = client.count(COLLECTION_NAME).count
         
         if count == 0:
-            print("❌ Vector store is empty. Run /refresh to initialize.")
-            return []
+            print("⚠️ Vector store is empty")
+            return None  # Collection exists but is empty
         
         vector_size = collection_info.config.params.vectors.size
         if vector_size != EXPECTED_DIM:
-            print(f"❌ Dimension mismatch: {vector_size} vs {EXPECTED_DIM}. Run /refresh.")
-            return []
+            print(f"❌ Dimension mismatch: {vector_size} vs {EXPECTED_DIM}")
+            return None  # Wrong dimensions
             
     except Exception as e:
-        print(f"❌ Collection not found: {e}. Run /refresh.")
-        return []
+        print(f"❌ Collection not found: {e}")
+        return None  # Collection doesn't exist
     
-    question_embedding = get_embedding_sync(question, input_type="query")
+    # Generate query embedding
+    try:
+        question_embedding = get_embedding_sync(question, input_type="query")
+    except Exception as e:
+        print(f"❌ Error generating query embedding: {e}")
+        return []  # Return empty, not None - embedding failed but DB is ok
     
+    # Search
     try:
         results = client.search(
             collection_name=COLLECTION_NAME,
             query_vector=question_embedding,
             limit=top_k
         )
+        
+        relevant_messages = [
+            {
+                'user_name': r.payload['user_name'],
+                'user_id': r.payload['user_id'],
+                'timestamp': r.payload['timestamp'],
+                'message': r.payload['message']
+            }
+            for r in results
+        ]
+        
+        if relevant_messages:
+            print(f"🔍 Found {len(relevant_messages)} relevant messages")
+        else:
+            print(f"🔍 No relevant messages found for query")
+        
+        return relevant_messages  # Can be empty list if no matches
+        
     except Exception as e:
         print(f"❌ Search error: {e}")
-        return []
-    
-    relevant_messages = [
-        {
-            'user_name': r.payload['user_name'],
-            'user_id': r.payload['user_id'],
-            'timestamp': r.payload['timestamp'],
-            'message': r.payload['message']
-        }
-        for r in results
-    ]
-    
-    print(f"🔍 Found {len(relevant_messages)} relevant messages")
-    return relevant_messages
+        return []  # Search failed but DB exists
 
 
 async def embed_batch_async(messages: List[Dict], start_idx: int) -> List[PointStruct]:

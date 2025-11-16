@@ -31,22 +31,6 @@ def root():
     return RedirectResponse(url="/docs")
 
 
-@app.get("/health")
-def health_check():
-    try:
-        messages = get_messages()
-        stats = get_collection_stats()
-        return {
-            "status": "healthy",
-            "messages_cached": len(messages),
-            "vector_store": stats,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        raise HTTPException(status_code=503, detail=str(e))
-
-
 @app.get("/ask")
 def ask_question(question: str = Query(..., min_length=3)):
     logger.info(f"Question: {question}")

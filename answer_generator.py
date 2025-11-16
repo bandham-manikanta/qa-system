@@ -16,21 +16,13 @@ def prepare_context(messages: List[Dict]) -> str:
         context_lines.append(line)
     return "\n---\n".join(context_lines)
 
-
-def generate_answer(question: str, messages: List[Dict] = None) -> str:
-    """
-    Use vector search + LLM to answer the question.
-    
-    Args:
-        question: User's question
-        messages: Optional - if provided, uses these instead of vector search
-                  (used for backward compatibility)
-    """
+def generate_answer(question: str) -> str:
+    # Search for relevant messages
     relevant_messages = search_relevant_messages(question, top_k=15)
     
-    # If no messages found, return helpful error
-    if not relevant_messages:
-        return "Vector store not initialized. Please contact admin to run /refresh endpoint first."
+    # If search failed due to missing collection, return error
+    if relevant_messages is None:
+        return "Vector store not initialized. Please run /refresh to initialize embeddings."
     
     client = OpenAI(
         api_key=os.getenv("NVIDIA_API_KEY"),
