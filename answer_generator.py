@@ -9,19 +9,11 @@ load_dotenv()
 
 MODEL_NAME = "qwen/qwen3-next-80b-a3b-instruct"
 
-
 def prepare_context(messages: List[Dict]) -> str:
-    """Convert messages to a readable format for the LLM."""
     context_lines = []
-    
     for msg in messages:
-        line = (
-            f"User: {msg['user_name']}\n"
-            f"Date: {msg['timestamp']}\n"
-            f"Message: {msg['message']}\n"
-        )
+        line = f"User: {msg['user_name']}\nDate: {msg['timestamp']}\nMessage: {msg['message']}"
         context_lines.append(line)
-    
     return "\n---\n".join(context_lines)
 
 
@@ -34,20 +26,16 @@ def generate_answer(question: str, messages: List[Dict] = None) -> str:
         messages: Optional - if provided, uses these instead of vector search
                   (used for backward compatibility)
     """
+    relevant_messages = search_relevant_messages(question, top_k=15)
+    
+    # If no messages found, return helpful error
+    if not relevant_messages:
+        return "Vector store not initialized. Please contact admin to run /refresh endpoint first."
+    
     client = OpenAI(
         api_key=os.getenv("NVIDIA_API_KEY"),
         base_url=os.getenv("NVIDIA_BASE_URL")
     )
-    # Use vector search to find relevant messages
-    if messages is None:
-        print(f"🔎 Using vector search for: {question}")
-        relevant_messages = search_relevant_messages(question, top_k=15)
-    else:
-        # Fallback to old method if messages provided
-        relevant_messages = messages
-    
-    if not relevant_messages:
-        return "I don't have any relevant information to answer this question."
 
     context = prepare_context(relevant_messages)
     

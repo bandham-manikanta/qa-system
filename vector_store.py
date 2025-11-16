@@ -1,15 +1,19 @@
-# vector_store.py
+# vector_store.py - add rate limit handling
 import os
+import asyncio
 from qdrant_client import QdrantClient
-from typing import List, Dict
+from qdrant_client.models import Distance, VectorParams, PointStruct
+from typing import List, Dict, Optional, Callable
 from dotenv import load_dotenv
-from openai import OpenAI
+import httpx
+import time
 
 load_dotenv()
 
 _client = None
-_embeddings_client = None
 COLLECTION_NAME = "member_messages"
+EXPECTED_DIM = 1024
+
 
 def get_client():
     global _client
@@ -21,47 +25,119 @@ def get_client():
         )
     return _client
 
-def get_embeddings_client():
-    global _embeddings_client
-    if _embeddings_client is None:
-        _embeddings_client = OpenAI(
-            api_key=os.getenv("NVIDIA_API_KEY"),
-            base_url="https://integrate.api.nvidia.com/v1"
-        )
-    return _embeddings_client
 
-def get_embedding(text: str, input_type: str = "passage") -> List[float]:
-    """
-    Get embedding from NVIDIA API
+async def get_embedding_async(text: str, input_type: str = "passage", max_retries: int = 5) -> List[float]:
+    """Get embedding with retry logic for rate limits"""
+    url = "https://integrate.api.nvidia.com/v1/embeddings"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY')}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "input": text,
+        "model": "nvidia/nv-embedqa-e5-v5",
+        "encoding_format": "float",
+        "input_type": input_type,
+        "truncate": "END"
+    }
     
-    Args:
-        text: Text to embed
-        input_type: "query" for questions, "passage" for documents
-    """
-    client = get_embeddings_client()
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                
+                if response.status_code == 429:  # Rate limit
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                    print(f"⚠️ Rate limit hit, waiting {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                response.raise_for_status()
+                data = response.json()
+                return data["data"][0]["embedding"]
+                
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429 and attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"⚠️ Rate limit (attempt {attempt + 1}/{max_retries}), waiting {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            else:
+                raise
+        except Exception as e:
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1)
+            else:
+                raise
     
-    response = client.embeddings.create(
-        input=text,
-        model="nvidia/nv-embedqa-e5-v5",
-        encoding_format="float",
-        extra_body={"input_type": input_type, "truncate": "END"}  # ADD THIS
-    )
+    raise Exception("Max retries exceeded")
+
+
+def get_embedding_sync(text: str, input_type: str = "passage") -> List[float]:
+    """Synchronous version for /ask queries"""
+    url = "https://integrate.api.nvidia.com/v1/embeddings"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY')}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "input": text,
+        "model": "nvidia/nv-embedqa-e5-v5",
+        "encoding_format": "float",
+        "input_type": input_type,
+        "truncate": "END"
+    }
     
-    return response.data[0].embedding
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return data["data"][0]["embedding"]
+
 
 def get_collection_stats() -> Dict:
     try:
         client = get_client()
         count = client.count(COLLECTION_NAME).count
-        return {"total_documents": count, "initialized": True, "type": "qdrant_cloud"}
+        collection_info = get_client().get_collection(COLLECTION_NAME)
+        vector_size = collection_info.config.params.vectors.size
+        
+        return {
+            "total_documents": count, 
+            "initialized": True, 
+            "type": "qdrant_cloud",
+            "dimension": vector_size,
+            "dimension_match": vector_size == EXPECTED_DIM
+        }
     except:
-        return {"total_documents": 0, "initialized": False, "type": "qdrant_cloud"}
+        return {
+            "total_documents": 0, 
+            "initialized": False, 
+            "type": "qdrant_cloud"
+        }
+
 
 def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
+    """Search for relevant messages"""
     client = get_client()
     
-    # Use "query" type for questions
-    question_embedding = get_embedding(question, input_type="query")
+    try:
+        collection_info = client.get_collection(COLLECTION_NAME)
+        count = client.count(COLLECTION_NAME).count
+        
+        if count == 0:
+            print("❌ Vector store is empty. Run /refresh to initialize.")
+            return []
+        
+        vector_size = collection_info.config.params.vectors.size
+        if vector_size != EXPECTED_DIM:
+            print(f"❌ Dimension mismatch: {vector_size} vs {EXPECTED_DIM}. Run /refresh.")
+            return []
+            
+    except Exception as e:
+        print(f"❌ Collection not found: {e}. Run /refresh.")
+        return []
+    
+    question_embedding = get_embedding_sync(question, input_type="query")
     
     try:
         results = client.search(
@@ -70,7 +146,7 @@ def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
             limit=top_k
         )
     except Exception as e:
-        print(f"Search error: {e}")
+        print(f"❌ Search error: {e}")
         return []
     
     relevant_messages = [
@@ -86,38 +162,22 @@ def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
     print(f"🔍 Found {len(relevant_messages)} relevant messages")
     return relevant_messages
 
-def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
-    client = get_client()
-    
-    collections = client.get_collections().collections
-    exists = any(c.name == COLLECTION_NAME for c in collections)
-    
-    if exists and not force_recreate:
-        count = client.count(COLLECTION_NAME).count
-        if count == len(messages):
-            print(f"✓ Using existing {count} embeddings")
-            return
-        client.delete_collection(COLLECTION_NAME)
-    elif exists and force_recreate:
-        client.delete_collection(COLLECTION_NAME)
-    
-    from qdrant_client.models import Distance, VectorParams, PointStruct
-    
-    client.create_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=1024, distance=Distance.COSINE)
-    )
-    
-    print(f"📝 Embedding {len(messages)} messages using NVIDIA API...")
-    
+
+async def embed_batch_async(messages: List[Dict], start_idx: int) -> List[PointStruct]:
+    """Embed a batch with delay between requests"""
     points = []
+    
     for idx, msg in enumerate(messages):
         text = f"User: {msg['user_name']}\nDate: {msg['timestamp']}\nMessage: {msg['message']}"
-        # Use "passage" type for documents being indexed
-        embedding = get_embedding(text, input_type="passage")
+        
+        # Add small delay to avoid rate limits
+        if idx > 0:
+            await asyncio.sleep(0.1)  # 100ms delay between requests
+        
+        embedding = await get_embedding_async(text, input_type="passage")
         
         points.append(PointStruct(
-            id=idx,
+            id=start_idx + idx,
             vector=embedding,
             payload={
                 "user_name": msg['user_name'],
@@ -126,14 +186,96 @@ def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
                 "message": msg['message']
             }
         ))
+    
+    return points
+
+
+async def initialize_vector_store_async(
+    messages: List[Dict], 
+    force_recreate: bool = False,
+    progress_callback: Optional[Callable] = None,
+    concurrent_batches: int = 3  # Reduced from 10 to avoid rate limits
+):
+    """Initialize vector store with rate limit handling"""
+    client = get_client()
+    
+    # Check/create collection
+    collections = client.get_collections().collections
+    exists = any(c.name == COLLECTION_NAME for c in collections)
+    
+    if exists:
+        if force_recreate:
+            print("🔄 Deleting existing collection...")
+            client.delete_collection(COLLECTION_NAME)
+        else:
+            try:
+                collection_info = client.get_collection(COLLECTION_NAME)
+                vector_size = collection_info.config.params.vectors.size
+                count = client.count(COLLECTION_NAME).count
+                
+                if vector_size != EXPECTED_DIM:
+                    print(f"⚠️ Wrong dimensions, recreating...")
+                    client.delete_collection(COLLECTION_NAME)
+                elif count == len(messages):
+                    print(f"✓ Already has {count} embeddings")
+                    return
+                else:
+                    print(f"⚠️ Count mismatch, recreating...")
+                    client.delete_collection(COLLECTION_NAME)
+            except:
+                pass
+    
+    # Create collection
+    print(f"📝 Creating collection ({EXPECTED_DIM}-dim)")
+    client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(size=EXPECTED_DIM, distance=Distance.COSINE)
+    )
+    
+    # Process in smaller batches with rate limiting
+    batch_size = 20  # Smaller batches
+    all_points = []
+    
+    print(f"🔧 Embedding {len(messages)} messages ({concurrent_batches} concurrent batches)...")
+    print(f"⏱️ Estimated time: ~{len(messages) * 0.15 / 60:.1f} minutes")
+    
+    for i in range(0, len(messages), batch_size * concurrent_batches):
+        batch_groups = []
+        for j in range(concurrent_batches):
+            start = i + (j * batch_size)
+            end = min(start + batch_size, len(messages))
+            if start < len(messages):
+                batch_groups.append((messages[start:end], start))
         
-        if (idx + 1) % 50 == 0:
-            print(f"  Embedded {idx + 1}/{len(messages)}")
+        # Process batches
+        tasks = [embed_batch_async(batch, start_idx) for batch, start_idx in batch_groups]
+        batch_results = await asyncio.gather(*tasks)
+        
+        for batch_points in batch_results:
+            all_points.extend(batch_points)
+        
+        progress = len(all_points)
+        percentage = progress / len(messages) * 100
+        print(f"  📊 {progress}/{len(messages)} ({percentage:.1f}%)")
+        
+        if progress_callback:
+            progress_callback(progress, len(messages), "embedding")
+        
+        # Delay between batch groups to avoid rate limits
+        await asyncio.sleep(0.5)
     
-    batch_size = 100
-    for i in range(0, len(points), batch_size):
-        batch = points[i:i+batch_size]
+    # Upload to Qdrant
+    print("💾 Uploading to Qdrant...")
+    upload_batch_size = 100
+    
+    for i in range(0, len(all_points), upload_batch_size):
+        batch = all_points[i:i+upload_batch_size]
         client.upsert(collection_name=COLLECTION_NAME, points=batch)
-        print(f"  Uploaded {min(i+batch_size, len(points))}/{len(points)}")
+        print(f"  📤 Uploaded {min(i + upload_batch_size, len(all_points))}/{len(all_points)}")
     
-    print(f"✅ Stored {len(messages)} embeddings in Qdrant")
+    print(f"✅ Successfully stored {len(messages)} embeddings")
+
+
+def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
+    """Sync wrapper"""
+    asyncio.run(initialize_vector_store_async(messages, force_recreate))
