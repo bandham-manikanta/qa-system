@@ -4,6 +4,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from typing import List, Dict
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
@@ -15,15 +16,14 @@ def get_client():
     global _client
     if _client is None:
         _client = QdrantClient(
-            url=os.getenv("CLOUD_QDRANT_URL"),
-            api_key=os.getenv("CLOUD_QDRANT_API_KEY")
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY")
         )
     return _client
 
 def get_model():
     global _model
     if _model is None:
-        from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer('all-MiniLM-L6-v2')
     return _model
 
