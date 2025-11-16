@@ -51,16 +51,6 @@ The messages don't connect to each other. Someone asks "can you update my phone 
 
 Another weird thing - it's all customer messages. Zero responses from the concierge service. No "yes we booked that" or "sorry that's not available". So when I answer "what did someone book" I'm really saying what they asked for, not what actually happened.
 
-## London question - example:
-
-One of the example questions was "When is Layla planning her trip to London?"
-
-I searched through her messages. She mentions London once - needs a chauffeur "for her stay in London next month". But that's it. No date. Just "next month".
-
-So the system says "I don't have that information" which actually makes sense. There really isn't a specific date in the data. The search finds the right message, the LLM reads it, sees "next month" isn't a date, and correctly reports that.
-
-Kind of a perfect example of the system working right even when it looks wrong.
-
 ## What I'd change
 
 There's no memory between questions. Can't do follow-ups. Like you can't ask "when is Layla's trip" and then "where is she staying" - the second question doesn't know what the first one was about.
