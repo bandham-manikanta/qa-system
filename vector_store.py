@@ -115,9 +115,6 @@ def get_collection_stats() -> Dict:
             "type": "qdrant_cloud"
         }
 
-
-# vector_store.py - update search_relevant_messages function
-
 def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
     """
     Search for relevant messages
@@ -142,16 +139,15 @@ def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
             
     except Exception as e:
         print(f"❌ Collection not found: {e}")
-        return None  # Collection doesn't exist
+        return None  # If Collection doesn't exist
     
     # Generate query embedding
     try:
         question_embedding = get_embedding_sync(question, input_type="query")
     except Exception as e:
         print(f"❌ Error generating query embedding: {e}")
-        return []  # Return empty, not None - embedding failed but DB is ok
+        return []
     
-    # Search
     try:
         results = client.search(
             collection_name=COLLECTION_NAME,
@@ -174,11 +170,11 @@ def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
         else:
             print(f"🔍 No relevant messages found for query")
         
-        return relevant_messages  # Can be empty list if no matches
+        return relevant_messages
         
     except Exception as e:
         print(f"❌ Search error: {e}")
-        return []  # Search failed but DB exists
+        return []
 
 
 async def embed_batch_async(messages: List[Dict], start_idx: int) -> List[PointStruct]:
@@ -188,9 +184,8 @@ async def embed_batch_async(messages: List[Dict], start_idx: int) -> List[PointS
     for idx, msg in enumerate(messages):
         text = f"User: {msg['user_name']}\nDate: {msg['timestamp']}\nMessage: {msg['message']}"
         
-        # Add small delay to avoid rate limits
         if idx > 0:
-            await asyncio.sleep(0.1)  # 100ms delay between requests
+            await asyncio.sleep(0.1)
         
         embedding = await get_embedding_async(text, input_type="passage")
         
@@ -212,7 +207,7 @@ async def initialize_vector_store_async(
     messages: List[Dict], 
     force_recreate: bool = False,
     progress_callback: Optional[Callable] = None,
-    concurrent_batches: int = 3  # Reduced from 10 to avoid rate limits
+    concurrent_batches: int = 3
 ):
     """Initialize vector store with rate limit handling"""
     client = get_client()
@@ -243,15 +238,13 @@ async def initialize_vector_store_async(
             except:
                 pass
     
-    # Create collection
     print(f"📝 Creating collection ({EXPECTED_DIM}-dim)")
     client.create_collection(
         collection_name=COLLECTION_NAME,
         vectors_config=VectorParams(size=EXPECTED_DIM, distance=Distance.COSINE)
     )
     
-    # Process in smaller batches with rate limiting
-    batch_size = 20  # Smaller batches
+    batch_size = 20
     all_points = []
     
     print(f"🔧 Embedding {len(messages)} messages ({concurrent_batches} concurrent batches)...")
@@ -265,7 +258,6 @@ async def initialize_vector_store_async(
             if start < len(messages):
                 batch_groups.append((messages[start:end], start))
         
-        # Process batches
         tasks = [embed_batch_async(batch, start_idx) for batch, start_idx in batch_groups]
         batch_results = await asyncio.gather(*tasks)
         
@@ -279,10 +271,8 @@ async def initialize_vector_store_async(
         if progress_callback:
             progress_callback(progress, len(messages), "embedding")
         
-        # Delay between batch groups to avoid rate limits
         await asyncio.sleep(0.5)
     
-    # Upload to Qdrant
     print("💾 Uploading to Qdrant...")
     upload_batch_size = 100
     

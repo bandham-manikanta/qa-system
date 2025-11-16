@@ -17,10 +17,8 @@ def prepare_context(messages: List[Dict]) -> str:
     return "\n---\n".join(context_lines)
 
 def generate_answer(question: str) -> str:
-    # Search for relevant messages
     relevant_messages = search_relevant_messages(question, top_k=15)
     
-    # If search failed due to missing collection, return error
     if relevant_messages is None:
         return "Vector store not initialized. Please run /refresh to initialize embeddings."
     

@@ -10,7 +10,7 @@ def fetch_all_messages() -> List[Dict]:
     
     all_messages = []
     skip = 0
-    limit = 4000  # Smaller batches
+    limit = 4000
     max_retries = 3
     
     print("Fetching messages from API...")
@@ -42,8 +42,8 @@ def fetch_all_messages() -> List[Dict]:
                         return all_messages
                     
                     skip += limit
-                    time.sleep(0.2)  # Small delay between requests
-                    break  # Success, exit retry loop
+                    time.sleep(0.2)
+                    break
                     
                 elif response.status_code == 401:
                     print(f"⚠️ 401 Unauthorized - retrying in {2 ** attempt} seconds...")
@@ -72,7 +72,6 @@ def fetch_all_messages() -> List[Dict]:
                     raise
                 time.sleep(2)
         
-        # If all retries failed for this batch
         if all_messages:
             print(f"⚠️ Stopping at {len(all_messages)} messages due to repeated failures")
             return all_messages
