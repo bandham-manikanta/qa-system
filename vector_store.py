@@ -1,10 +1,8 @@
 # vector_store.py
 import os
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
 from typing import List, Dict
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
@@ -17,15 +15,55 @@ def get_client():
     if _client is None:
         _client = QdrantClient(
             url=os.getenv("QDRANT_URL"),
-            api_key=os.getenv("QDRANT_API_KEY")
+            api_key=os.getenv("QDRANT_API_KEY"),
+            timeout=60
         )
     return _client
 
 def get_model():
     global _model
     if _model is None:
+        print("Loading sentence transformer model...")
+        from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer('all-MiniLM-L6-v2')
+        print("Model loaded!")
     return _model
+
+def get_collection_stats() -> Dict:
+    try:
+        client = get_client()
+        count = client.count(COLLECTION_NAME).count
+        return {"total_documents": count, "initialized": True, "type": "qdrant_cloud"}
+    except:
+        return {"total_documents": 0, "initialized": False, "type": "qdrant_cloud"}
+
+def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
+    client = get_client()
+    model = get_model()  # Only loads when first /ask is called
+    
+    question_embedding = model.encode(question).tolist()
+    
+    try:
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=question_embedding,
+            limit=top_k
+        )
+    except:
+        return []
+    
+    relevant_messages = [
+        {
+            'user_name': r.payload['user_name'],
+            'user_id': r.payload['user_id'],
+            'timestamp': r.payload['timestamp'],
+            'message': r.payload['message']
+        }
+        for r in results
+    ]
+    
+    print(f"🔍 Found {len(relevant_messages)} relevant messages")
+    return relevant_messages
 
 def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
     client = get_client()
@@ -44,6 +82,8 @@ def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
         client.delete_collection(COLLECTION_NAME)
     
     # Create collection
+    from qdrant_client.models import Distance, VectorParams, PointStruct
+    
     client.create_collection(
         collection_name=COLLECTION_NAME,
         vectors_config=VectorParams(size=384, distance=Distance.COSINE)
@@ -78,45 +118,3 @@ def initialize_vector_store(messages: List[Dict], force_recreate: bool = False):
         print(f"  Uploaded {min(i+batch_size, len(points))}/{len(points)}")
     
     print(f"✅ Stored {len(messages)} embeddings in Qdrant")
-
-def search_relevant_messages(question: str, top_k: int = 15) -> List[Dict]:
-    client = get_client()
-    
-    # Check if collection exists
-    try:
-        client.get_collection(COLLECTION_NAME)
-    except:
-        # Initialize on first use
-        from message_fetcher import get_messages
-        messages = get_messages()
-        initialize_vector_store(messages)
-    
-    model = get_model()
-    question_embedding = model.encode(question).tolist()
-    
-    results = client.search(
-        collection_name=COLLECTION_NAME,
-        query_vector=question_embedding,
-        limit=top_k
-    )
-    
-    relevant_messages = [
-        {
-            'user_name': r.payload['user_name'],
-            'user_id': r.payload['user_id'],
-            'timestamp': r.payload['timestamp'],
-            'message': r.payload['message']
-        }
-        for r in results
-    ]
-    
-    print(f"🔍 Found {len(relevant_messages)} relevant messages")
-    return relevant_messages
-
-def get_collection_stats() -> Dict:
-    try:
-        client = get_client()
-        count = client.count(COLLECTION_NAME).count
-        return {"total_documents": count, "initialized": True, "type": "qdrant_cloud"}
-    except:
-        return {"total_documents": 0, "initialized": False, "type": "qdrant_cloud"}

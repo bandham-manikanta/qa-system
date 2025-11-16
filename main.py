@@ -1,11 +1,10 @@
 # main.py
-import uvicorn
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from message_fetcher import get_messages
 from answer_generator import generate_answer
 from vector_store import get_collection_stats
-from fastapi.responses import RedirectResponse
 from datetime import datetime
 import logging
 
@@ -31,6 +30,10 @@ app.add_middleware(
 def root():
     return RedirectResponse(url="/docs")
 
+
+@app.get("/ping")
+def ping():
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/health")
@@ -87,7 +90,3 @@ def get_stats():
         "top_users": [{"name": name, "count": count} for name, count in top_users],
         "timestamp": datetime.utcnow().isoformat()
     }
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
